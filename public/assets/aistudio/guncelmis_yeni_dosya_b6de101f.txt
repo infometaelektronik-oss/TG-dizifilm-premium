@@ -1,0 +1,179 @@
+================================================================================
+PYTHON SCRAPER MODÜLÜ (src/lib/scraper.py)
+================================================================================
+import sys
+import json
+import asyncio
+from playwright.async_api import async_playwright
+async def analyze_dizipal_page(url: str):
+result = {
+"url": url,
+"title": None,
+"m3u8_urls": [],
+"mp4_urls": [],
+"iframes": [],
+"categories": []
+}
+async with async_playwright() as p:
+# Tarayıcıyı başlat (Headless/Arka planda)
+browser = await p.chromium.launch(headless=True)
+context = await browser.new_context(
+user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+page = await context.new_page()
+# Ağ isteklerini dinle (.m3u8 ve .mp4 yakalamak için)
+def handle_request(request):
+req_url = request.url
+if ".m3u8" in req_url and req_url not in result["m3u8_urls"]:
+result["m3u8_urls"].append(req_url)
+elif ".mp4" in req_url and req_url not in result["mp4_urls"]:
+result["mp4_urls"].append(req_url)
+page.on("request", handle_request)
+try:
+# Sayfaya git ve yüklenmesini bekle
+await page.goto(url, wait_until="networkidle", timeout=30000)
+# Sayfa Başlığı
+result["title"] = await page.title()
+# iFrame Bağlantıları
+iframes = page.frames
+for frame in iframes:
+if frame.url and frame.url != url and not frame.url.startswith("about:"):
+result["iframes"].append(frame.url)
+# Türler / Kategoriler (Dizipal Arayüz Elementleri)
+categories = await page.query_selector_all(".categories a, .genres a, .tags a")
+for cat in categories:
+text = await cat.inner_text()
+if text and text.strip() not in result["categories"]:
+result["categories"].append(text.strip())
+except Exception as e:
+result["error"] = str(e)
+finally:
+await browser.close()
+return result
+if name == "main":
+if len(sys.argv) > 1:
+target_url = sys.argv[1]
+res = asyncio.run(analyze_dizipal_page(target_url))
+print(json.dumps(res, ensure_ascii=False, indent=2))
+else:
+print(json.dumps({"error": "Lütfen geçerli bir URL belirtin."}))
+================================================================================
+2. BACKEND EXPRESS API (src/server.ts)
+import express, { Request, Response } from 'express';
+import { spawn } from 'child_process';
+import path from 'path';
+const app = express();
+app.use(express.json());
+// Dizipal Kazıma API Uç Noktası
+app.post('/api/scrape-dizipal', (req: Request, res: Response) => {
+const { url } = req.body;
+if (!url) {
+return res.status(400).json({ success: false, error: 'URL parametresi gerekli.' });
+}
+const pythonScript = path.join(__dirname, 'lib', 'scraper.py');
+const pythonProcess = spawn('python3', [pythonScript, url]);
+let outputData = '';
+let errorData = '';
+pythonProcess.stdout.on('data', (data) => {
+outputData += data.toString();
+});
+pythonProcess.stderr.on('data', (data) => {
+errorData += data.toString();
+});
+pythonProcess.on('close', (code) => {
+if (code !== 0) {
+console.error(Python Scraper Hatası: ${errorData});
+return res.status(500).json({ success: false, error: 'Kazıma işlemi sırasında hata oluştu.', details: errorData });
+}
+try:
+const parsedData = JSON.parse(outputData);
+return res.json({ success: true, data: parsedData });
+} catch (e) {
+return res.status(500).json({ success: false, error: 'Çıktı JSON formatına dönüştürülemedi.', raw: outputData });
+}
+});
+});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+console.log(Sunucu ${PORT} portunda çalışıyor.);
+});
+================================================================================
+3. YÖNETİM PANELİ COMPONENT (src/components/tg/admin/ContentManagerPanel.tsx)
+import React, { useState } from 'react';
+interface ScrapeResult {
+title?: string;
+m3u8_urls: string[];
+mp4_urls: string[];
+iframes: string[];
+categories: string[];
+}
+export const ContentManagerPanel: React.FC = () => {
+const [targetUrl, setTargetUrl] = useState('');
+const [loading, setLoading] = useState(false);
+const [result, setResult] = useState<ScrapeResult | null>(null);
+const [error, setError] = useState<string | null>(null);
+const handleScrape = async () => {
+if (!targetUrl) return;
+setLoading(true);
+setError(null);
+setResult(null);
+try {
+const response = await fetch('/api/scrape-dizipal', {
+method: 'POST',
+headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({ url: targetUrl }),
+});
+const resData = await response.json();
+if (resData.success) {
+setResult(resData.data);
+} else {
+setError(resData.error || 'İçerik çekilemedi.');
+}
+} catch (err: any) {
+setError('Sunucu bağlantı hatası: ' + err.message);
+} finally {
+setLoading(false);
+}
+};
+return (
+<div style={{ padding: '20px', backgroundColor: '#1e1e1e', color: '#fff', borderRadius: '8px' }}>
+<h2>Dizipal Otomatik İçerik Çekici</h2>
+<div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+<input
+type="text"
+value={targetUrl}
+onChange={(e) => setTargetUrl(e.target.value)}
+placeholder="https://dizipal... URL adresini girin"
+style={{ flex: 1, padding: '10px', borderRadius: '4px', border: '1px solid #444', backgroundColor: '#2a2a2a', color: '#fff' }}
+/>
+<button
+onClick={handleScrape}
+disabled={loading}
+style={{ padding: '10px 20px', borderRadius: '4px', backgroundColor: '#e50914', color: '#fff', border: 'none', cursor: 'pointer' }}
+>
+{loading ? 'Çekiliyor...' : 'İçeriği Analiz Et ve Çek'}
+</button>
+</div>
+{error && <div style={{ color: '#ff5555', marginBottom: '15px' }}>⚠️ {error}</div>}
+{result && (
+<div style={{ backgroundColor: '#2a2a2a', padding: '15px', borderRadius: '6px' }}>
+<h3>Başlık: {result.title || 'Bulunamadı'}</h3>
+<h4>Kategoriler / Türler:</h4>
+<p>{result.categories.length > 0 ? result.categories.join(', ') : 'Kategori bulunamadı'}</p>
+<h4>Tespit Edilen .m3u8 Yayın Bağlantıları:</h4>
+<ul>
+{result.m3u8_urls.map((u, i) => (
+<li key={i} style={{ wordBreak: 'break-all' }}>{u}</li>
+))}
+</ul>
+<h4>iFrame Adresleri:</h4>
+<ul>
+{result.iframes.map((iframe, i) => (
+<li key={i} style={{ wordBreak: 'break-all' }}>{iframe}</li>
+))}
+</ul>
+</div>
+)}
+</div>
+);
+};

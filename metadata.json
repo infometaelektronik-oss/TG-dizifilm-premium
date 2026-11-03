@@ -1,0 +1,7 @@
+{
+  "name": "TG. Dizi Film",
+  "description": "TG. Dizi Film: Canlı TV, Radyo, Diziler, Filmler, TG TV otonom yayın platformu ve yönetim paneli.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

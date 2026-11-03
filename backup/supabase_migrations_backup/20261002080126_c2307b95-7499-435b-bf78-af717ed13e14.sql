@@ -1,0 +1,2 @@
+GRANT SELECT ON public.watch_events TO authenticated;
+CREATE POLICY "Admins read watch events" ON public.watch_events FOR SELECT TO authenticated USING (public.has_role(auth.uid(), 'admin'::app_role));

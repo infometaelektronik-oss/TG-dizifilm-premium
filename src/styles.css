@@ -1,0 +1,138 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-neon: var(--neon);
+  --color-neon-glow: var(--neon-glow);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--neon);
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
+}
+
+:root {
+  --background: oklch(0 0 0);
+  --foreground: oklch(0.98 0 0);
+  --surface: oklch(0.16 0 0);
+  --surface-2: oklch(0.22 0 0);
+  --muted: oklch(0.25 0 0);
+  --muted-foreground: oklch(0.7 0 0);
+  --border: oklch(0.28 0 0);
+  --neon: oklch(0.62 0.28 305);
+  --neon-glow: oklch(0.72 0.32 305);
+}
+
+@layer base {
+  * { border-color: var(--color-border); }
+  body {
+    background: #000;
+    color: var(--color-foreground);
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+}
+
+@layer utilities {
+  .font-orbitron { font-family: "Orbitron", ui-sans-serif, system-ui, sans-serif; letter-spacing: 0.02em; }
+  .font-bebas { font-family: "Bebas Neue", ui-sans-serif, system-ui, sans-serif; letter-spacing: 0.06em; }
+  .font-audiowide { font-family: "Audiowide", ui-sans-serif, system-ui, sans-serif; letter-spacing: 0.04em; }
+
+  .neon-text {
+    font-family: "Orbitron", ui-sans-serif, system-ui, sans-serif;
+    color: #d8b4ff;
+    text-shadow:
+      0 0 4px #c084fc,
+      0 0 12px #a855f7,
+      0 0 24px #7e22ce,
+      0 0 48px #6b21a8;
+    letter-spacing: 0.08em;
+  }
+  .neon-ring {
+    box-shadow:
+      0 0 0 4px rgba(168, 85, 247, 0.9),
+      0 0 24px 6px rgba(168, 85, 247, 0.6),
+      0 0 60px 10px rgba(126, 34, 206, 0.45);
+  }
+  .neon-soft {
+    box-shadow: 0 0 24px rgba(168, 85, 247, 0.35);
+  }
+  .scrollbar-hide::-webkit-scrollbar { display: none; }
+  .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+  /* Sistem durumu rozeti — yeşil pulse */
+  .status-dot-live {
+    animation: status-pulse 2s ease-in-out infinite;
+    box-shadow: 0 0 6px rgba(34, 197, 94, 0.9), 0 0 14px rgba(34, 197, 94, 0.55);
+  }
+  @keyframes status-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.55; transform: scale(0.8); }
+  }
+
+  .badge-new-pulse {
+    background: linear-gradient(90deg, #a855f7, #ec4899, #a855f7);
+    background-size: 200% 100%;
+    animation: badge-pulse-glow 1.8s ease-in-out infinite, badge-shimmer 2.4s linear infinite;
+    box-shadow:
+      0 0 8px rgba(236, 72, 153, 0.7),
+      0 0 18px rgba(168, 85, 247, 0.6),
+      0 0 32px rgba(168, 85, 247, 0.4);
+  }
+  @keyframes badge-pulse-glow {
+    0%, 100% {
+      box-shadow:
+        0 0 8px rgba(236, 72, 153, 0.7),
+        0 0 18px rgba(168, 85, 247, 0.6),
+        0 0 32px rgba(168, 85, 247, 0.4);
+    }
+    50% {
+      box-shadow:
+        0 0 14px rgba(236, 72, 153, 1),
+        0 0 28px rgba(168, 85, 247, 0.95),
+        0 0 56px rgba(168, 85, 247, 0.7);
+    }
+  }
+  @keyframes badge-shimmer {
+    0% { background-position: 0% 50%; }
+    100% { background-position: 200% 50%; }
+  }
+}
+
+/* ============================================================
+   TV BOX MODU — Android TV / Google TV / Tizen / webOS
+   UA-based; __root.tsx setliyor: <html data-tv="1">
+   Amaç: GPU/CPU zayıf chipsetlerde donmayı bitirmek + D-Pad odağı
+   ============================================================ */
+html[data-tv="1"] * {
+  animation-duration: 0.001ms !important;
+  animation-delay: 0.001ms !important;
+  transition-duration: 60ms !important;
+}
+html[data-tv="1"] .backdrop-blur,
+html[data-tv="1"] [class*="backdrop-blur"],
+html[data-tv="1"] [class*="blur-"] {
+  backdrop-filter: none !important;
+  filter: none !important;
+}
+html[data-tv="1"] [style*="will-change"] { will-change: auto !important; }
+html[data-tv="1"] .badge-new-pulse,
+html[data-tv="1"] .status-dot-live { animation: none !important; box-shadow: none !important; }
+html[data-tv="1"] .neon-text { text-shadow: 0 0 4px #a855f7 !important; }
+html[data-tv="1"] body { font-size: 18px; }
+html[data-tv="1"] :focus-visible,
+html[data-tv="1"] [data-focused="true"] {
+  outline: 4px solid #c084fc !important;
+  outline-offset: 3px !important;
+  border-radius: 12px;
+}
+
