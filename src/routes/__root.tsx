@@ -115,6 +115,21 @@ function RootComponent() {
       document.documentElement.dataset.tv = "1";
     }
 
+    // Auto-cleanup legacy 128 cache from localStorage to guarantee 4,429 fresh items
+    try {
+      const dbStr = localStorage.getItem("tg_dizi_db");
+      if (dbStr) {
+        const parsed = JSON.parse(dbStr);
+        if (parsed.user_streams) {
+          delete parsed.user_streams;
+          localStorage.setItem("tg_dizi_db", JSON.stringify(parsed));
+          window.dispatchEvent(new CustomEvent("tg-db-synced"));
+        }
+      }
+    } catch {
+      // ignore
+    }
+
     // D-Pad kilit: yön tuşlarında tarayıcı scroll'unu engelle, spatial nav'a bırak
     const onKey = (e: KeyboardEvent) => {
       const nav = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];

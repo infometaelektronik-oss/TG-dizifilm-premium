@@ -60,7 +60,7 @@ const saveSchema = z.object({
 });
 
 const updateSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().min(1),
   title: z.string().trim().min(2).max(120).optional(),
   posterUrl: z.string().trim().url().optional().or(z.literal("")),
   backdropUrl: z.string().trim().url().optional().or(z.literal("")),
@@ -279,7 +279,7 @@ export const updateUserStream = createServerFn({ method: "POST" })
 
 export const reorderUserStreams = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input) => z.object({ ids: z.array(z.string().uuid()).max(2000) }).parse(input))
+  .inputValidator((input) => z.object({ ids: z.array(z.string().min(1)).max(2000) }).parse(input))
   .handler(async ({ data, context }) => {
     await assertAdminRole(context.supabase, context.userId);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -291,7 +291,7 @@ export const reorderUserStreams = createServerFn({ method: "POST" })
 
 export const removeUserStream = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input) => z.object({ id: z.string().uuid() }).parse(input))
+  .inputValidator((input) => z.object({ id: z.string().min(1) }).parse(input))
   .handler(async ({ data, context }) => {
     await assertAdminRole(context.supabase, context.userId);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -373,7 +373,7 @@ export const repairSeriesMetadata = createServerFn({ method: "POST" })
 // ---------------------------------------------------------------------------
 
 const bulkSchema = z.object({
-  ids: z.array(z.string().uuid()).min(1).max(1000),
+  ids: z.array(z.string().min(1)).min(1).max(1000),
   patch: z
     .object({
       category: CATEGORY_ENUM.optional(),
@@ -421,7 +421,7 @@ export const bulkUpdateUserStreams = createServerFn({ method: "POST" })
 export const bulkDeleteUserStreams = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input) =>
-    z.object({ ids: z.array(z.string().uuid()).min(1).max(1000) }).parse(input),
+    z.object({ ids: z.array(z.string().min(1)).min(1).max(1000) }).parse(input),
   )
   .handler(async ({ data, context }) => {
     await assertAdminRole(context.supabase, context.userId);
@@ -453,7 +453,7 @@ export const bulkDeleteUserStreams = createServerFn({ method: "POST" })
 export const hotSwapStreamUrl = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input) =>
-    z.object({ id: z.string().uuid(), sourceUrl: z.string().url().max(2000) }).parse(input),
+    z.object({ id: z.string().min(1), sourceUrl: z.string().url().max(2000) }).parse(input),
   )
   .handler(async ({ data, context }) => {
     await assertAdminRole(context.supabase, context.userId);

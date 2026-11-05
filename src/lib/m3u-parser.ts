@@ -16,6 +16,7 @@ export type SubCategory =
   | "Ulusal"
   | "Haber"
   | "Sinema"
+  | "Dizi"
   | "Belgesel"
   | "Spor"
   | "Çocuk"

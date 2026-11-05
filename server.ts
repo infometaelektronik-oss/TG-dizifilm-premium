@@ -50,12 +50,26 @@ async function startServer() {
 
   // Database API
   app.get("/api/db/data", (_req, res) => {
-    res.json(loadStore());
+    res.json(loadStore(true));
   });
 
   app.post("/api/db/sync", (req, res) => {
     try {
       if (req.body && typeof req.body === "object") {
+        const current = loadStore();
+        const incoming = req.body;
+        // Protect server database from stale client overwrites (e.g. tablet with 128 items vs 4400+ items on server)
+        if (
+          Array.isArray(incoming.user_streams) &&
+          Array.isArray(current.user_streams) &&
+          incoming.user_streams.length < current.user_streams.length / 2 &&
+          current.user_streams.length > 500
+        ) {
+          console.warn(
+            `[NativeDB] Blocked stale client sync: incoming ${incoming.user_streams.length} vs server ${current.user_streams.length} streams.`
+          );
+          return res.json({ ok: true, preserved: true });
+        }
         saveStore(req.body);
         res.json({ ok: true });
       } else {
@@ -212,6 +226,29 @@ async function startServer() {
     } catch (err: any) {
       console.error("[Server Gemini Proxy] Error:", err?.message || err);
       return res.json({ text: null, error: err?.message || "Gemini error" });
+    }
+  });
+
+  // Google Gemini Real-Time Turkish Dubbing & Scene Analysis Endpoint
+  app.post("/api/ai/live-dubbing", async (req, res) => {
+    try {
+      const { title, category, genre, description, currentTime, history } = req.body || {};
+      if (!title) {
+        return res.status(400).json({ ok: false, error: "title parametresi zorunludur" });
+      }
+      const { generateLiveDubbingDialogue } = await import("./src/lib/gemini-dubbing.server.ts");
+      const result = await generateLiveDubbingDialogue({
+        title,
+        category,
+        genre,
+        description,
+        currentTime: Number(currentTime) || 0,
+        history: Array.isArray(history) ? history : [],
+      });
+      res.json(result);
+    } catch (e: any) {
+      console.error("[Live Dubbing API Error]", e);
+      res.status(500).json({ ok: false, error: e.message || String(e) });
     }
   });
 
@@ -431,6 +468,80 @@ Size nasıl yardımcı olabilirim?`;
     }
   });
 
+  // Autonomous Multi-Agent Network Execution
+  app.post("/api/autonomous/run-agents", async (_req, res) => {
+    try {
+      const { runAutonomousAgentNetwork } = await import("./src/lib/autonomous-agents.server.ts");
+      const result = await runAutonomousAgentNetwork();
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  // Telegram Test Notification
+  app.post("/api/autonomous/telegram-test", async (req, res) => {
+    try {
+      const { message } = req.body || {};
+      const { sendTelegramReport } = await import("./src/lib/autonomous-agents.server.ts");
+      const defaultMsg = message || "Ağa, programda yayın gecikmesi ve önbellek sıkıntısı vardı, Gemini Guardian tarafından çözüldü.";
+      const result = await sendTelegramReport(defaultMsg);
+      res.json({ ok: result.sent, mode: result.mode, message: defaultMsg, error: result.error });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  // Telegram Settings GET / POST
+  app.get("/api/autonomous/telegram-settings", async (_req, res) => {
+    try {
+      const store = loadStore();
+      const settings = store.app_settings || [];
+      const token = settings.find((s: any) => s.key === "telegram_bot_token")?.value || process.env.TELEGRAM_BOT_TOKEN || "";
+      const chatId = settings.find((s: any) => s.key === "telegram_chat_id")?.value || process.env.TELEGRAM_CHAT_ID || "";
+      res.json({ ok: true, hasToken: Boolean(token), botTokenMasked: token ? `${token.slice(0, 6)}...${token.slice(-4)}` : "", chatId });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post("/api/autonomous/telegram-settings", async (req, res) => {
+    try {
+      const { botToken, chatId } = req.body || {};
+      const store = loadStore();
+      if (!Array.isArray(store.app_settings)) store.app_settings = [];
+      
+      const upsertSetting = (key: string, value: string) => {
+        const idx = store.app_settings.findIndex((s: any) => s.key === key);
+        if (idx >= 0) store.app_settings[idx].value = value;
+        else store.app_settings.push({ key, value, updated_at: new Date().toISOString() });
+      };
+
+      if (typeof botToken === "string") upsertSetting("telegram_bot_token", botToken.trim());
+      if (typeof chatId === "string") upsertSetting("telegram_chat_id", chatId.trim());
+
+      saveStore(store);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  // Stream Speed Test & Autonomous Server Failover Endpoint
+  app.post("/api/diagnostics/speed-test", async (req, res) => {
+    try {
+      const { streamUrl, streamId, title, forceFailover } = req.body || {};
+      if (!streamUrl) {
+        return res.status(400).json({ ok: false, error: "streamUrl zorunludur." });
+      }
+      const { runStreamSpeedTest } = await import("./src/lib/diagnostics.server.ts");
+      const result = await runStreamSpeedTest({ streamUrl, streamId, title, forceFailover });
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
   // Smart Tools Runner Endpoint (executes without freezing frontend)
   app.post("/api/smart-tools/run", async (req, res) => {
     try {
@@ -548,6 +659,88 @@ Size nasıl yardımcı olabilirim?`;
           ok: true,
           summary: `Meta-veri zenginleştirme · ${r.updated}/${r.scanned} içerik zenginleştirildi (${r.source})`,
           samples: [],
+        });
+      }
+
+      if (action === "import-raw-m3u") {
+        const { content, category: chosenCategory } = req.body || {};
+        if (!content || typeof content !== "string") {
+          return res.status(400).json({ ok: false, error: "Metin içeriği gerekli." });
+        }
+        const { parseM3U } = await import("./src/lib/m3u-parser.ts");
+        const { classify } = await import("./src/lib/media-classifier.ts");
+        const store = loadStore();
+        if (!Array.isArray(store.user_streams)) store.user_streams = [];
+
+        let items: Array<{ title: string; url: string; logo?: string; group?: string }> = [];
+        const trimmed = content.trim();
+
+        if (trimmed.includes("#EXTM3U") || trimmed.includes("#EXTINF")) {
+          const parsed = parseM3U(trimmed);
+          items = parsed.map((p) => ({ title: p.title, url: p.url, logo: p.tvgLogo, group: p.groupTitle }));
+        } else {
+          const lines = trimmed.split(/[\r\n]+/).map((l) => l.trim()).filter((l) => /^https?:\/\//i.test(l));
+          items = lines.map((url, i) => {
+            const filename = url.split("/").pop()?.split("?")[0] || `Medya Akışı ${i + 1}`;
+            return { title: decodeURIComponent(filename).replace(/\.[a-z0-9]+$/i, ""), url };
+          });
+        }
+
+        let importedCount = 0;
+        const now = new Date().toISOString();
+        const finalCategory = chosenCategory || "Movies";
+
+        for (const it of items) {
+          const existingIdx = store.user_streams.findIndex((s) => s.source_url === it.url);
+          const classified = classify(it.title, it.url, it.group);
+          const cat = finalCategory || classified.category || "Movies";
+          const subCat = cat === "Movies" ? "Sinema" : cat === "Series" ? "Dizi" : (classified.subCategory || "Genel");
+
+          const rec = {
+            id: existingIdx >= 0 ? store.user_streams[existingIdx].id : `imp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            title: it.title,
+            normalized_title: it.title.toLowerCase(),
+            source_url: it.url,
+            category: cat,
+            sub_category: subCat,
+            country: classified.country || "Türkiye",
+            is_foreign: classified.isForeign ?? false,
+            stream_type: it.url.toLowerCase().includes(".mp4") ? "MP4" : "HLS",
+            poster_url: it.logo || null,
+            logo_url: it.logo || null,
+            description: `Doğrudan içe aktarıldı (${cat}).`,
+            channel_group: cat === "Movies" ? "Filmler" : cat === "Series" ? "Diziler" : "Ulusal",
+            is_active: true,
+            status: "active",
+            quarantine_reason: null,
+            failure_count: 0,
+            manual_lock: true,
+            tags: ["direct-import", cat.toLowerCase()],
+            updated_at: now,
+            created_at: existingIdx >= 0 ? store.user_streams[existingIdx].created_at : now,
+          };
+
+          if (existingIdx >= 0) {
+            store.user_streams[existingIdx] = { ...store.user_streams[existingIdx], ...rec };
+          } else {
+            store.user_streams.unshift(rec);
+          }
+          importedCount++;
+        }
+
+        saveStore(store);
+
+        await logAudit({
+          action: "smart.import_raw",
+          source: "smart_tools",
+          level: "success",
+          message: `${importedCount} adet içerik (${finalCategory}) başarıyla aktarıldı.`,
+        });
+
+        return res.json({
+          ok: true,
+          count: importedCount,
+          summary: `${importedCount} adet içerik başarıyla aktarıldı ve yayına alındı.`,
         });
       }
 

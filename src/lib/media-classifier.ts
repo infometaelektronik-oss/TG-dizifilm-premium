@@ -8,6 +8,7 @@ export type SubCategory =
   | "Yabancı TV"
   | "Sinema"
   | "Yabancı Sinema"
+  | "Dizi"
   | "Belgesel"
   | "Spor"
   | "Yabancı Spor"
@@ -206,17 +207,20 @@ export function classify(
       ? "HLS"
       : "MP4";
 
-  const seriesHints = ["sezon", "season", "episode", "bölüm", "bolum", "s01e", "s02e", "s03e", "s04e", "dizi"];
+  const seriesHints = ["sezon", "season", "episode", "bölüm", "bolum", "s01e", "s02e", "s03e", "s04e", "dizi", "dizileri", "dizisi"];
+  const movieHints = ["film", "filmi", "movies", "sinema", "cinema", "vod", "pelicula", "kino", "movie"];
   const isRadio = isAudioExt || RADIO_HINTS.test(haystack);
   const looksSeries = seriesHints.some((h) => haystack.includes(h));
+  const looksMovie = movieHints.some((h) => haystack.includes(h)) || isVodFile;
 
-  const category: StreamCategory = isRadio
-    ? "Radio"
-    : isVodFile
-      ? looksSeries
-        ? "Series"
-        : "Movies"
-      : "Live TV";
+  let category: StreamCategory = "Live TV";
+  if (isRadio) {
+    category = "Radio";
+  } else if (looksSeries) {
+    category = "Series";
+  } else if (looksMovie) {
+    category = "Movies";
+  }
 
   const { country, isForeign, subCategory } = detectOriginAndSubCategory(title, sourceUrl, groupTitle);
 

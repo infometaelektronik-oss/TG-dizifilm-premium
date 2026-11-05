@@ -11,7 +11,8 @@ import {
   type AdminStream,
   type HomeRowWithItems,
 } from "@/lib/home-layout.functions";
-import { bulkUpdateUserStreams, type StreamCategory } from "@/lib/streams.functions";
+import { bulkUpdateUserStreams, rowToStream, type StreamCategory } from "@/lib/streams.functions";
+import { loadStore } from "@/db/native-db";
 import { streamToMedia } from "../AdminSources";
 import type { Media } from "../data";
 
@@ -71,10 +72,38 @@ export function ContentManagerPanel({ onPick }: { onPick: (m: Media) => void }) 
           limit: PAGE,
         },
       });
-      setItems(res.items);
-      setTotal(res.total);
-    } catch (e) {
-      setNote(e instanceof Error ? e.message : "Yüklenemedi");
+      if (res && Array.isArray(res.items)) {
+        setItems(res.items);
+        setTotal(res.total);
+        return;
+      }
+    } catch {
+      // Fallback to loadStore
+    }
+
+    try {
+      const store = loadStore();
+      let list = (store.user_streams || []).filter((s) => !s.deleted_at);
+      if (q) {
+        const term = q.toLowerCase();
+        list = list.filter((s) => s.title.toLowerCase().includes(term));
+      }
+      if (category) list = list.filter((s) => s.category === category);
+      if (country) list = list.filter((s) => s.country === country);
+      if (sub) list = list.filter((s) => s.sub_category === sub);
+      if (origin === "local") list = list.filter((s) => !s.is_foreign);
+      if (origin === "foreign") list = list.filter((s) => s.is_foreign);
+      if (status === "active") list = list.filter((s) => s.is_active !== false && !s.quarantine_reason);
+      if (status === "quarantine") list = list.filter((s) => s.is_active === false || s.quarantine_reason);
+
+      const pageItems = list.slice(offset, offset + PAGE).map((s) => ({
+        ...rowToStream(s),
+        manualLock: Boolean(s.manual_lock),
+      }));
+      setItems(pageItems);
+      setTotal(list.length);
+    } catch {
+      setNote("Veriler yüklenemedi");
     }
   }, [searchFn, q, category, country, sub, origin, status, offset]);
 

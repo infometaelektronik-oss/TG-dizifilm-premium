@@ -16,6 +16,8 @@ import { AIAssistant, AIAssistantFab } from "@/components/tg/AIAssistant";
 import { NotificationBell } from "@/components/tg/NotificationBell";
 import { RadioView } from "@/components/tg/RadioView";
 import { TGTVView } from "@/components/tg/TGTV";
+import { SeriesView } from "@/components/tg/SeriesView";
+import { MovieView } from "@/components/tg/MovieView";
 import { getHomeLayout, type HomeRowWithItems } from "@/lib/home-layout.functions";
 
 
@@ -44,7 +46,6 @@ function TGApp() {
   const [aiOpen, setAiOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [genre, setGenre] = useState("Tümü");
-  const [movieGenre, setMovieGenre] = useState<string>("Tümü");
   const { streams } = useAllStreams();
   const [homeRows, setHomeRows] = useState<HomeRowWithItems[]>([]);
   const [homeLoaded, setHomeLoaded] = useState(false);
@@ -214,30 +215,6 @@ function TGApp() {
     ? parseInt(focusedKey.slice(4), 10)
     : activeNav;
 
-  const userSeriesChannels = useMemo(() => {
-    const groups = new Map<string, Media[]>();
-    streams
-      .filter((stream) => stream.category === "Series")
-      .forEach((stream) => {
-        const media = streamToMedia(stream);
-        const title =
-          stream.seriesTitle ||
-          media.title.split(/\s*[-–]\s*Sezon|\s+S\d+E\d+/i)[0] ||
-          media.title;
-        const existing = groups.get(title) || [];
-        existing.push(media);
-        groups.set(title, existing);
-      });
-    return Array.from(groups.entries()).map(([name, items], index) => ({
-      id: `user-series-${index}`,
-      name,
-      logo: name.slice(0, 1).toUpperCase(),
-      accent: "from-purple-500 to-fuchsia-700",
-      items: items.sort(
-        (a, b) => (a.season ?? 0) - (b.season ?? 0) || (a.episode ?? 0) - (b.episode ?? 0),
-      ),
-    }));
-  }, [streams]);
   const allPlayable = useMemo(() => streams.map(streamToMedia).filter((item) => item.video), [streams]);
 
   const getEnrichment = useEnrichment(NO_TITLES);
@@ -303,120 +280,27 @@ function TGApp() {
             );
           })()}
 
-          {/* === DİZİLER — sadece category=Series, sezon/bölüm hiyerarşili === */}
-          {activeNav === 4 && (() => {
-            if (userSeriesChannels.length === 0) {
-              return (
-                <div className="rounded-3xl border border-dashed border-white/15 bg-white/5 p-12 text-center text-white/60">
-                  Henüz hiç dizi eklenmemiş. Admin → AI Kazıyıcı veya M3U yükleme ile dizi ekleyebilirsin.
-                </div>
-              );
-            }
-            let counter = 0;
-            return (
-              <div className="space-y-8">
-                {userSeriesChannels.map((ch) => (
-                  <section key={ch.id}>
-                    <div className="mb-3 flex items-center gap-3">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-purple-500 to-fuchsia-700 text-sm font-black">
-                        {ch.logo}
-                      </div>
-                      <h2 className="text-xl font-black">{ch.name}</h2>
-                      <span className="rounded-full bg-purple-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-purple-200">
-                        {ch.items.length} bölüm
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4">
-                      {ch.items.map((m) => {
-                        const fk = `series-${counter++}`;
-                        const en = getEnrichment(m.title);
-                        return (
-                          <div key={m.id} onClick={() => playMedia(m)} className="cursor-pointer">
-                            <PosterCard
-                              media={m}
-                              focused={focusedKey === fk}
-                              registerRef={(el) => registerRef(fk, el)}
-                              focusKey={fk}
-                              onPick={playMedia}
-                              posterOverride={en?.posterUrl}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </section>
-                ))}
-              </div>
-            );
-          })()}
+          {/* === DİZİLER: Ulusal Kanal ve Kategori Hiyerarşili === */}
+          {activeNav === 4 && (
+            <SeriesView
+              focusedKey={focusedKey}
+              registerRef={registerRef}
+              onPick={playMedia}
+              streams={streams}
+              getEnrichment={getEnrichment}
+            />
+          )}
 
-          {/* === FILMLER === */}
-          {activeNav === 5 && (() => {
-            const MOVIE_GENRES = ["Tümü", "Aksiyon", "Komedi", "Dram", "Bilim Kurgu", "Korku", "Romantik", "Animasyon", "Belgesel", "Diğer"] as const;
-            // Canlı yayınlar bu sekmeye asla girmez: yalnızca kategorisi "Movies" olan
-            // ve gerçek bir video dosyasına işaret eden kayıtlar listelenir.
-            const userMovies = streams
-              .filter(
-                (s) =>
-                  s.category === "Movies" &&
-                  /\.(mp4|mkv|avi|mov|webm)(\?|$)/i.test(s.sourceUrl),
-              )
-              .map(streamToMedia);
-            const all: Media[] = userMovies;
-            const filtered = movieGenre === "Tümü"
-              ? all
-              : all.filter((m) => {
-                  const hay = [m.subCategory || "", m.genre, ...(m.genres || []), m.description].join(" ").toLowerCase();
-                  return hay.includes(movieGenre.toLowerCase());
-                });
-            return (
-              <section>
-                <div className="mb-5 flex items-center gap-3">
-                  <div className="h-8 w-1.5 rounded-full bg-gradient-to-b from-purple-400 to-fuchsia-600" />
-                  <h2 className="text-xl font-black tracking-tight">Filmler</h2>
-                  <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-white/60">
-                    {filtered.length} başlık
-                  </span>
-                </div>
-                <div className="mb-5 flex flex-wrap gap-2">
-                  {MOVIE_GENRES.map((g) => {
-                    const active = movieGenre === g;
-                    return (
-                      <button
-                        key={g}
-                        onClick={() => setMovieGenre(g)}
-                        className={`rounded-full px-4 py-2 text-xs font-black uppercase tracking-widest transition ${
-                          active
-                            ? "bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white shadow-[0_0_20px_rgba(168,85,247,0.5)]"
-                            : "bg-white/10 text-white/70 hover:bg-white/15"
-                        }`}
-                      >
-                        {g}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4 md:gap-5">
-                  {filtered.map((m, i) => {
-                    const fk = `film-${i}`;
-                    const en = getEnrichment(m.title);
-                    return (
-                      <div key={m.id} onClick={() => playMedia(m)} className="cursor-pointer">
-                        <PosterCard
-                          media={m}
-                          focused={focusedKey === fk}
-                          registerRef={(el) => registerRef(fk, el)}
-                          focusKey={fk}
-                          onPick={playMedia}
-                          posterOverride={en?.posterUrl}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            );
-          })()}
+          {/* === FILMLER: Seçkin Sinema Yapımları (Canlı TV Hariç) === */}
+          {activeNav === 5 && (
+            <MovieView
+              focusedKey={focusedKey}
+              registerRef={registerRef}
+              onPick={playMedia}
+              streams={streams}
+              getEnrichment={getEnrichment}
+            />
+          )}
 
           {activeNav === 1 && (
             <LiveTV focusedKey={focusedKey} registerRef={registerRef} onPick={playMedia} streams={streams} />

@@ -219,11 +219,10 @@ function getNodeModule(name: string) {
   }
 }
 
-export function loadStore(): DbData {
-  if (memoryStore) return memoryStore;
+export function loadStore(forceReload = false): DbData {
+  if (memoryStore && !forceReload && !isNode) return memoryStore;
 
   const current: DbData = { ...getEmptyStore(), ...(initialData as any) };
-  memoryStore = current;
 
   if (isNode) {
     try {
@@ -243,21 +242,39 @@ export function loadStore(): DbData {
       console.warn("[NativeDB] Could not load from filesystem:", e);
     }
   } else {
+    // In browser: initialData is bundled and contains all 4,429 items!
+    // Streams are authoritative from server & bundle. LocalStorage only stores user preferences.
     try {
       const local = localStorage.getItem("tg_dizi_db");
       if (local) {
         const parsed = JSON.parse(local);
-        Object.assign(current, parsed);
+        if (parsed.user_streams) {
+          // Permanently purge streams from localStorage to prevent any stale cache pollution
+          delete parsed.user_streams;
+          localStorage.setItem("tg_dizi_db", JSON.stringify(parsed));
+        }
+        if (Array.isArray(parsed.user_favorites)) current.user_favorites = parsed.user_favorites;
+        if (Array.isArray(parsed.notifications)) current.notifications = parsed.notifications;
+        if (Array.isArray(parsed.app_settings)) current.app_settings = parsed.app_settings;
       }
     } catch {
-      // ignore
+      try {
+        localStorage.removeItem("tg_dizi_db");
+      } catch {
+        // ignore
+      }
     }
+
     if (typeof fetch !== "undefined") {
       fetch("/api/db/data")
         .then((r) => r.json())
         .then((data) => {
-          if (data && memoryStore) {
-            Object.assign(memoryStore, data);
+          if (data && Array.isArray(data.user_streams) && data.user_streams.length > 0) {
+            if (memoryStore) Object.assign(memoryStore, data);
+            else memoryStore = data;
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new CustomEvent("tg-db-synced"));
+            }
           }
         })
         .catch(() => {});
@@ -276,6 +293,7 @@ export function loadStore(): DbData {
     current.user_streams.unshift(TG_TV_STREAM);
   }
 
+  memoryStore = current;
   return current;
 }
 
@@ -289,7 +307,11 @@ export function saveStore(store: DbData): void {
         const dbDir = path.resolve(process.cwd(), "data");
         if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
         const dbPath = path.resolve(dbDir, "database.json");
-        fs.writeFileSync(dbPath, JSON.stringify(store, null, 2), "utf-8");
+        const jsonStr = JSON.stringify(store, null, 2);
+        fs.writeFileSync(dbPath, jsonStr, "utf-8");
+        // Keep initial_data.json in sync so client bundle has latest items
+        const initPath = path.resolve(dbDir, "initial_data.json");
+        fs.writeFileSync(initPath, jsonStr, "utf-8");
       }
     } catch (e) {
       console.warn("[NativeDB] Could not write to disk:", e);

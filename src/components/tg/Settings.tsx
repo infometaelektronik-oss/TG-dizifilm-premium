@@ -66,10 +66,13 @@ export function SettingsView({
   const [subtitle, setSubtitle] = usePersistentState("subtitle", "Türkçe");
   const [subtitleSize, setSubtitleSize] = usePersistentState("subtitleSize", 22);
   const [audioLang, setAudioLang] = usePersistentState("audioLang", "Orijinal");
+  const [liveSubtitleAiPref, setLiveSubtitleAiPref] = usePersistentState("liveSubtitleAiPref", true);
 
-  // Parental + Network
+  // Parental + Network + Dynamic Tuning
   const [pin, setPin] = usePersistentState("pin", false);
   const [bandwidth, setBandwidth] = usePersistentState("bandwidth", 85);
+  const [adaptiveBitrate, setAdaptiveBitrate] = usePersistentState("adaptiveBitrate", true);
+  const [dynamicUiTuning, setDynamicUiTuning] = usePersistentState("dynamicUiTuning", true);
 
   let idx = 0;
   const key = () => `set-${idx++}`;
@@ -260,10 +263,37 @@ export function SettingsView({
           focusedKey={focusedKey}
           baseKey={key()}
         />
+        <ToggleRow
+          label="Canlı AI Altyazı (Yabancı Yayınlarda Çeviri)"
+          value={liveSubtitleAiPref}
+          onChange={setLiveSubtitleAiPref}
+          focusKey={key()}
+          focusedKey={focusedKey}
+          registerRef={registerRef}
+          icon={<Sparkles className="h-4 w-4 text-amber-400" />}
+        />
       </Section>
 
       {/* NETWORK & PARENTAL */}
       <Section title="Yayın & Ebeveyn Kontrolü" icon={<Wifi className="h-5 w-5" />}>
+        <ToggleRow
+          label="Kanal Kalite / Adaptif Bitrate (Donma Önleyici)"
+          value={adaptiveBitrate}
+          onChange={setAdaptiveBitrate}
+          focusKey={key()}
+          focusedKey={focusedKey}
+          registerRef={registerRef}
+          icon={<Zap className="h-4 w-4 text-cyan-400" />}
+        />
+        <ToggleRow
+          label="Dinamik Arayüz Sıralaması (Dynamic UI Tuning)"
+          value={dynamicUiTuning}
+          onChange={setDynamicUiTuning}
+          focusKey={key()}
+          focusedKey={focusedKey}
+          registerRef={registerRef}
+          icon={<Palette className="h-4 w-4 text-purple-400" />}
+        />
         <SliderRow
           label="Maks. Bant Genişliği"
           icon={<Wifi className="h-4 w-4" />}

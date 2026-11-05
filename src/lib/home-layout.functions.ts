@@ -86,8 +86,12 @@ async function resolveRowItems(db: Db, row: HomeRow, includeInactive = false): P
     rule.sort === "title"
       ? q.order("title", { ascending: true })
       : q.order("sort_order", { ascending: true }).order("created_at", { ascending: false });
-  const { data } = await q.limit(Math.min(Math.max(row.maxItems, 1), 200));
-  return (data ?? []).map((r: Row) => rowToStream(r));
+  const { data } = await q.limit(Math.min(Math.max(row.maxItems, 1) * 2, 300));
+  const snippetRe = /fragman|trailer|teaser|\bkesit\b|\bklip\b/i;
+  const filtered = (data ?? [])
+    .filter((r: Row) => !snippetRe.test(r.title))
+    .slice(0, Math.min(Math.max(row.maxItems, 1), 200));
+  return filtered.map((r: Row) => rowToStream(r));
 }
 
 /* ------------------------------------------------------------------ */
@@ -97,7 +101,10 @@ async function resolveRowItems(db: Db, row: HomeRow, includeInactive = false): P
 export const getHomeLayout = createServerFn({ method: "GET" }).handler(
   async (): Promise<HomeRowWithItems[]> => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { loadStore } = await import("@/db/native-db");
     const db = supabaseAdmin as Db;
+    const store = loadStore();
+
     const { data, error } = await db
       .from("home_rows")
       .select("*")
@@ -105,9 +112,40 @@ export const getHomeLayout = createServerFn({ method: "GET" }).handler(
       .order("position", { ascending: true });
     if (error) return [];
     const rows = (data ?? []).map((r: DbHomeRow) => toHomeRow(r)) as HomeRow[];
-    const resolved = await Promise.all(
+    let resolved = await Promise.all(
       rows.map(async (row) => ({ ...row, items: await resolveRowItems(db, row) })),
     );
+
+    // Dynamic UI Tuning (Kendi Kendine Arayüz Optimizasyonu):
+    // Analyze user interaction weights from watch_events & category clicks to optimize row sequence
+    const events = store.watch_events || [];
+    if (events.length > 0) {
+      const categoryWeights: Record<string, number> = {};
+      const now = Date.now();
+      for (const ev of events) {
+        const ageH = (now - new Date(ev.created_at || now).getTime()) / 3600_000;
+        const decay = Math.max(0.2, 1 - ageH / 72);
+        if (ev.category) {
+          categoryWeights[ev.category] = (categoryWeights[ev.category] || 0) + decay * 2;
+        }
+        if (ev.row_title) {
+          categoryWeights[ev.row_title] = (categoryWeights[ev.row_title] || 0) + decay * 3;
+        }
+      }
+
+      resolved = resolved.sort((a, b) => {
+        const catA = a.rule?.category || a.title;
+        const catB = b.rule?.category || b.title;
+        const weightA = (categoryWeights[catA] || 0) + (categoryWeights[a.title] || 0);
+        const weightB = (categoryWeights[catB] || 0) + (categoryWeights[b.title] || 0);
+
+        if (weightA !== weightB && (weightA > 2 || weightB > 2)) {
+          return weightB - weightA;
+        }
+        return a.position - b.position;
+      });
+    }
+
     return resolved;
   },
 );

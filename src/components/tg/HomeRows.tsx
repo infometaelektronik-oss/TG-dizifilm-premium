@@ -2,6 +2,8 @@ import type { Media } from "./data";
 import { PosterCard } from "./PosterCard";
 import { streamToMedia } from "./AdminSources";
 import type { HomeRowWithItems } from "@/lib/home-layout.functions";
+import { useServerFn } from "@tanstack/react-start";
+import { recordCategoryClick } from "@/lib/engagement.functions";
 
 type Props = {
   rows: HomeRowWithItems[];
@@ -10,8 +12,19 @@ type Props = {
   onPlay: (m: Media) => void;
 };
 
-/** Renders exactly the rows the admin configured, in the admin's order. */
+/** Renders rows with Dynamic UI Tuning interaction recording. */
 export function HomeRows({ rows, focusedKey, registerRef, onPlay }: Props) {
+  const recordClickFn = useServerFn(recordCategoryClick);
+
+  const handlePick = (m: Media, row: HomeRowWithItems, cat?: string) => {
+    recordClickFn({
+      data: {
+        category: row.rule?.category || cat || m.genre || "Genel",
+        rowTitle: row.title,
+      },
+    }).catch(() => {});
+    onPlay(m);
+  };
   return (
     <div className="mt-8 space-y-10">
       {rows.map((row, ri) => {
@@ -37,7 +50,7 @@ export function HomeRows({ rows, focusedKey, registerRef, onPlay }: Props) {
                       ref={(el) => registerRef(fk, el)}
                       data-focus-key={fk}
                       tabIndex={-1}
-                      onClick={() => onPlay(m)}
+                      onClick={() => handlePick(m, row, s.category)}
                       className={`flex aspect-[4/3] w-[150px] flex-shrink-0 flex-col items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 p-3 outline-none transition active:scale-95 md:w-[170px] ${
                         isFocus ? "neon-ring scale-105 bg-purple-600/20" : "hover:bg-white/10"
                       }`}
@@ -68,7 +81,7 @@ export function HomeRows({ rows, focusedKey, registerRef, onPlay }: Props) {
                       focused={focusedKey === fk}
                       registerRef={(el) => registerRef(fk, el)}
                       focusKey={fk}
-                      onPick={onPlay}
+                      onPick={(picked) => handlePick(picked, row, s.category)}
                     />
                   </div>
                 );

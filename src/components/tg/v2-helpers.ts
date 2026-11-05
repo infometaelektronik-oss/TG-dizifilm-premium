@@ -16,13 +16,9 @@ export function proxiedStreamUrl(sourceUrl: string, referer?: string): string {
 }
 
 function needsProxy(url: string): boolean {
-  // Heuristic: most cross-origin streams need it. We only skip when the
-  // source is clearly our own asset or a CORS-friendly sample.
   try {
     const u = new URL(url, typeof window !== "undefined" ? window.location.origin : "https://x");
     if (u.origin === (typeof window !== "undefined" ? window.location.origin : "")) return false;
-    // Well-known CORS-friendly buckets used in sample data
-    if (u.host.includes("commondatastorage.googleapis.com")) return false;
     return true;
   } catch {
     return false;

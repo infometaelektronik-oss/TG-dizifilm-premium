@@ -15,6 +15,13 @@ import {
   AudioWaveform,
   Languages,
   Volume1,
+  Mic,
+  Activity,
+  Subtitles,
+  Wifi,
+  RefreshCw,
+  Zap,
+  AlertTriangle,
 } from "lucide-react";
 import type { Media } from "./data";
 import { proxiedStreamUrl } from "./v2-helpers";
@@ -36,6 +43,15 @@ const RESOLUTIONS = [
   { id: "720", label: "HD", note: "720p" },
   { id: "480", label: "SD", note: "480p" },
 ] as const;
+
+function getYouTubeEmbedUrl(url?: string | null): string | null {
+  if (!url) return null;
+  const match = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i);
+  if (match && match[1]) {
+    return `https://www.youtube-nocookie.com/embed/${match[1]}?autoplay=1&playsinline=1&rel=0&modestbranding=1`;
+  }
+  return null;
+}
 
 export function VideoPlayer({ media, onClose, playlist = [], onAutoNext }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -68,6 +84,72 @@ export function VideoPlayer({ media, onClose, playlist = [], onAutoNext }: Props
   const recordViewFn = useServerFn(recordView);
   const closeRef = useRef<HTMLButtonElement>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Stream Error & Retry State
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState<number>(0);
+
+  // 2. Adaptive Bitrate & Anti-Freeze State
+  const [adaptiveBadge, setAdaptiveBadge] = useState<string | null>(null);
+
+  // 3. Speed Test & Autonomous Server Failover State
+  const [overrideSourceUrl, setOverrideSourceUrl] = useState<string | null>(null);
+  const [bypassYouTube, setBypassYouTube] = useState<boolean>(false);
+  const rawStreamUrl = overrideSourceUrl || media.video;
+  const youtubeEmbed = !bypassYouTube ? getYouTubeEmbedUrl(rawStreamUrl) : null;
+  const activePlayableUrl = bypassYouTube && getYouTubeEmbedUrl(rawStreamUrl)
+    ? (media.backupUrls?.[0] || "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4")
+    : rawStreamUrl;
+
+  const [showSpeedModal, setShowSpeedModal] = useState(false);
+  const [speedTesting, setSpeedTesting] = useState(false);
+  const [speedResult, setSpeedResult] = useState<any>(null);
+
+  // Auto-catch YouTube blocked iframe events (code 101/150 embed disallowed)
+  useEffect(() => {
+    const handleMsg = (e: MessageEvent) => {
+      try {
+        const data = typeof e.data === "string" ? JSON.parse(e.data) : e.data;
+        if (data?.event === "onError" || (data?.info && data.info.playerState === -1)) {
+          setStreamError("YouTube harici oynatmayı engelledi. Doğrudan yüksek hızlı akışa geçiliyor…");
+          setTimeout(() => {
+            setBypassYouTube(true);
+            setStreamError(null);
+          }, 1000);
+        }
+      } catch {}
+    };
+    window.addEventListener("message", handleMsg);
+    return () => window.removeEventListener("message", handleMsg);
+  }, []);
+
+  const handleRunSpeedTest = async (forceFailover = false) => {
+    setSpeedTesting(true);
+    try {
+      const activeStreamUrl = overrideSourceUrl || media.video || "";
+      const res = await fetch("/api/diagnostics/speed-test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          streamUrl: activeStreamUrl,
+          streamId: media.streamId || media.id,
+          title: media.title,
+          forceFailover,
+        }),
+      });
+      const data = await res.json();
+      setSpeedResult(data);
+      if (data.failoverTriggered && data.switchedToUrl) {
+        setOverrideSourceUrl(data.switchedToUrl);
+        setSwitchNote(`⚡ Hızlı Yedek Sunucuya Geçildi (Ping: ${data.pingMs}ms)`);
+        setTimeout(() => setSwitchNote(null), 5000);
+      }
+    } catch (e: any) {
+      setSpeedResult({ ok: false, message: `Test hatası: ${e.message}` });
+    } finally {
+      setSpeedTesting(false);
+    }
+  };
 
   const pingUI = useCallback(() => {
     setUiVisible(true);
@@ -133,8 +215,11 @@ export function VideoPlayer({ media, onClose, playlist = [], onAutoNext }: Props
     let hls: Hls | null = null;
     let disposed = false;
     const resumeAt = { t: 0 };
-    // Zero-buffer fallback chain: primary → backups, each tried direct then via proxy.
-    const sources = [media.video || "", ...(media.backupUrls || [])].filter(
+    // Zero-buffer fallback chain: primary (or diagnostic failover) → backups, each tried direct then via proxy.
+    const primaryUrl = activePlayableUrl || "";
+    if (!bypassYouTube && getYouTubeEmbedUrl(primaryUrl)) return;
+
+    const sources = [primaryUrl, ...(media.backupUrls || [])].filter(
       (u, i, arr) => u && arr.indexOf(u) === i,
     );
     const attempts: string[] = [];
@@ -160,8 +245,11 @@ export function VideoPlayer({ media, onClose, playlist = [], onAutoNext }: Props
       }
       const current = playlist.findIndex((item) => item.video === media.video || item.id === media.id);
       const next = playlist.slice(current + 1).find((item) => item.video && item.video !== media.video);
-      if (next) onAutoNext?.(next);
-      else onClose();
+      if (next && playlist.length > 1) {
+        onAutoNext?.(next);
+      } else {
+        setStreamError("Yayın akışı başlatılamadı. Kaynak çevrimdışı veya sunucu şu anda yanıt vermiyor.");
+      }
     };
 
     const setup = () => {
@@ -216,6 +304,13 @@ export function VideoPlayer({ media, onClose, playlist = [], onAutoNext }: Props
         hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, readTracks);
         hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, readTracks);
         hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (data.details === "bufferStalledError" || (data.type === Hls.ErrorTypes.MEDIA_ERROR && !data.fatal)) {
+            if (hls && typeof hls.currentLevel === "number" && hls.currentLevel > 0) {
+              hls.nextLevel = Math.max(0, hls.currentLevel - 1);
+              setAdaptiveBadge("⚡ Donma Önleyici: Çözünürlük Akıcı Seviyeye Ayarlandı");
+              setTimeout(() => setAdaptiveBadge(null), 3500);
+            }
+          }
           if (!data.fatal) return;
           if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
             hls?.recoverMediaError();
@@ -262,7 +357,7 @@ export function VideoPlayer({ media, onClose, playlist = [], onAutoNext }: Props
       hlsRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [media.id, media.video, media.referer, onAutoNext, onClose, playlist]);
+  }, [media.id, media.video, media.referer, onAutoNext, onClose, playlist, overrideSourceUrl, retryKey, bypassYouTube]);
 
   // Apply manual / auto quality selection to hls.js
   useEffect(() => {
@@ -429,15 +524,50 @@ export function VideoPlayer({ media, onClose, playlist = [], onAutoNext }: Props
       onTouchStart={pingUI}
       style={{ cursor: uiVisible ? "auto" : "none" }}
     >
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        crossOrigin="anonymous"
-        className="absolute inset-0 h-full w-full object-contain transition-[filter] duration-500"
-        style={{ background: "transparent", filter: remaster ? "contrast(1.12) saturate(1.18) brightness(1.04)" : undefined }}
-        poster={media.backdrop}
-      />
+      {youtubeEmbed ? (
+        <div className="absolute inset-0 h-full w-full z-0">
+          <iframe
+            src={youtubeEmbed}
+            title={media.title}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowFullScreen
+            className="h-full w-full border-0"
+          />
+          {/* Quick Fallback / Bypass Toolbar for Tablet */}
+          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center gap-2 rounded-2xl border border-white/20 bg-black/85 px-4 py-2 backdrop-blur-md shadow-2xl">
+            <span className="text-xs text-white/90">Video açılmadı mı?</span>
+            <button
+              onClick={() => {
+                setBypassYouTube(true);
+                setSwitchNote("⚡ Doğrudan Oynatıcıya Geçildi");
+                setTimeout(() => setSwitchNote(null), 4000);
+              }}
+              className="flex items-center gap-1.5 rounded-xl bg-purple-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-purple-500 shadow-md"
+            >
+              <Zap className="h-3.5 w-3.5" />
+              Doğrudan Oynatıcıya Geç
+            </button>
+            <a
+              href={rawStreamUrl || "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 rounded-xl bg-red-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-red-500 shadow-md"
+            >
+              📱 YouTube'da Aç
+            </a>
+          </div>
+        </div>
+      ) : (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          crossOrigin="anonymous"
+          className="absolute inset-0 h-full w-full object-contain transition-[filter] duration-500 z-0"
+          style={{ background: "transparent", filter: remaster ? "contrast(1.12) saturate(1.18) brightness(1.04)" : undefined }}
+          poster={media.backdrop}
+        />
+      )}
       <div className="absolute right-6 top-6 z-30 pointer-events-none opacity-40 mix-blend-screen select-none md:right-10 md:top-10">
         <div className="flex items-center gap-2 rounded-lg bg-black/20 p-2 backdrop-blur-sm border border-white/10">
           <div className="flex h-6 w-6 items-center justify-center rounded bg-gradient-to-br from-purple-600 to-fuchsia-600 text-white font-black text-[10px]">
@@ -450,7 +580,7 @@ export function VideoPlayer({ media, onClose, playlist = [], onAutoNext }: Props
 
       {/* Top bar */}
       <div
-        className={`relative z-10 flex items-start justify-between gap-3 px-3 pt-[max(0.75rem,env(safe-area-inset-top))] transition-opacity duration-500 sm:px-5 md:px-8 md:pt-6 ${uiVisible ? "opacity-100" : "pointer-events-none opacity-0"}`}
+        className={`relative z-30 flex items-start justify-between gap-3 px-3 pt-[max(0.75rem,env(safe-area-inset-top))] transition-opacity duration-500 sm:px-5 md:px-8 md:pt-6 ${uiVisible ? "opacity-100 pointer-events-auto" : "pointer-events-none opacity-0"}`}
       >
         <div className="min-w-0 flex-1">
           <div className="text-[10px] font-semibold uppercase tracking-[0.3em] text-purple-300 md:text-xs md:tracking-[0.4em]">
@@ -474,6 +604,11 @@ export function VideoPlayer({ media, onClose, playlist = [], onAutoNext }: Props
           {switchNote && (
             <div className="mt-2 inline-block rounded-full bg-purple-600/40 px-3 py-1 text-xs font-bold text-white">
               {switchNote}
+            </div>
+          )}
+          {adaptiveBadge && (
+            <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-cyan-500/50 bg-cyan-950/80 px-3.5 py-1 text-xs font-bold text-cyan-200 shadow-[0_0_20px_rgba(6,182,212,0.6)] backdrop-blur animate-pulse">
+              <span>{adaptiveBadge}</span>
             </div>
           )}
         </div>
@@ -502,9 +637,133 @@ export function VideoPlayer({ media, onClose, playlist = [], onAutoNext }: Props
         </div>
       </div>
 
+      {/* Stream Error Modal */}
+      {streamError && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/85 p-4 backdrop-blur-md">
+          <div className="w-full max-w-md rounded-3xl border border-red-500/40 bg-gradient-to-br from-slate-900 via-black to-red-950/80 p-6 text-center text-white shadow-2xl">
+            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-red-500/20 text-red-400">
+              <AlertTriangle className="h-8 w-8" />
+            </div>
+            <h3 className="text-xl font-black">Yayın Başlatılamadı</h3>
+            <p className="mt-2 text-xs text-white/70">
+              {streamError}
+            </p>
+            <div className="mt-5 flex flex-col gap-2">
+              <button
+                onClick={() => {
+                  setStreamError(null);
+                  setRetryKey((k) => k + 1);
+                }}
+                className="w-full rounded-2xl bg-purple-600 px-4 py-3 text-sm font-black text-white hover:bg-purple-500 active:scale-95 transition"
+              >
+                🔄 Yeniden Dene
+              </button>
+              <button
+                onClick={() => {
+                  setStreamError(null);
+                  setShowSpeedModal(true);
+                  handleRunSpeedTest(true);
+                }}
+                className="w-full rounded-2xl border border-cyan-500/30 bg-cyan-950/40 px-4 py-3 text-sm font-bold text-cyan-200 hover:bg-cyan-900/60 active:scale-95 transition"
+              >
+                ⚡ Hızlı Yedek Sunucu Ara
+              </button>
+              <button
+                onClick={onClose}
+                className="w-full rounded-2xl bg-white/10 px-4 py-3 text-sm font-bold text-white/80 hover:bg-white/20 active:scale-95 transition"
+              >
+                Kapat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Speed Test & Diagnostic Modal */}
+      {showSpeedModal && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md">
+          <div className="w-full max-w-md rounded-3xl border border-cyan-500/40 bg-gradient-to-br from-slate-900/95 via-black/95 to-cyan-950/90 p-6 shadow-2xl text-white">
+            <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-4">
+              <div className="flex items-center gap-2 font-black text-cyan-300">
+                <Activity className="h-5 w-5 text-cyan-400" />
+                <span>Akıllı Tanı & Hız Testi</span>
+              </div>
+              <button
+                onClick={() => setShowSpeedModal(false)}
+                className="rounded-full bg-white/10 p-1.5 hover:bg-white/20 text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-white/60 mb-4">
+              Yayın sunucusu gecikme süresini (ping) ve veri aktarım hızını test eder. Yavaşlama veya takılma varsa
+              tek tıkla otonom olarak en hızlı yedek sunucuya aktarır.
+            </p>
+
+            {speedResult ? (
+              <div className="space-y-3 mb-5">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-3 text-center">
+                    <span className="text-[10px] uppercase tracking-wider text-white/50 block">Sunucu Ping</span>
+                    <span
+                      className={`text-2xl font-black ${
+                        speedResult.pingMs < 100
+                          ? "text-emerald-400"
+                          : speedResult.pingMs < 200
+                            ? "text-amber-400"
+                            : "text-rose-400"
+                      }`}
+                    >
+                      {speedResult.pingMs} ms
+                    </span>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-3 text-center">
+                    <span className="text-[10px] uppercase tracking-wider text-white/50 block">Bant Genişliği</span>
+                    <span className="text-2xl font-black text-cyan-300">{speedResult.speedMbps} Mbps</span>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-black/40 p-3 text-xs flex items-center justify-between">
+                  <span className="text-white/60">Yayın Akıcılığı:</span>
+                  <span className="font-bold text-white px-2.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                    {speedResult.qualityGrade}
+                  </span>
+                </div>
+                <p className="text-xs text-cyan-200/90 bg-cyan-950/40 p-2.5 rounded-xl border border-cyan-800/40">
+                  {speedResult.message}
+                </p>
+              </div>
+            ) : (
+              <div className="py-6 text-center text-xs text-white/50">
+                {speedTesting ? "Sunucu ping ve bant genişliği ölçülüyor…" : "Testi başlatmak için aşağıdaki butona basın."}
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-2">
+              <button
+                onClick={() => handleRunSpeedTest(false)}
+                disabled={speedTesting}
+                className="flex-1 rounded-2xl bg-white/15 px-4 py-2.5 text-xs font-bold text-white hover:bg-white/20 active:scale-95 transition flex items-center justify-center gap-2"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${speedTesting ? "animate-spin" : ""}`} />
+                {speedTesting ? "Ölçülüyor…" : "Bağlantıyı Test Et"}
+              </button>
+              <button
+                onClick={() => handleRunSpeedTest(true)}
+                disabled={speedTesting}
+                className="flex-1 rounded-2xl bg-gradient-to-r from-amber-500 to-rose-600 px-4 py-2.5 text-xs font-black text-white hover:opacity-90 active:scale-95 transition flex items-center justify-center gap-2 shadow-lg shadow-rose-600/30"
+              >
+                <Zap className="h-3.5 w-3.5" />
+                <span>⚡ Sunucu Değiştir</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Bottom controls — flow container, never overflows */}
       <div
-        className={`relative z-10 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 transition-opacity duration-500 sm:px-5 md:px-8 md:pb-6 ${uiVisible ? "opacity-100" : "pointer-events-none opacity-0"}`}
+        className={`relative z-30 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 transition-opacity duration-500 sm:px-5 md:px-8 md:pb-6 ${uiVisible ? "opacity-100 pointer-events-auto" : "pointer-events-none opacity-0"}`}
       >
         {/* Resolution panel — anchored above controls, width-safe */}
         {showRes && (
@@ -680,6 +939,21 @@ export function VideoPlayer({ media, onClose, playlist = [], onAutoNext }: Props
           >
             <Settings2 className="h-4 w-4" />
             <span className="hidden sm:inline">{currentRes.label}</span>
+          </button>
+
+
+
+          <button
+            onClick={() => {
+              setShowSpeedModal(true);
+              handleRunSpeedTest(false);
+            }}
+            aria-label="Hız Testi & Tanı"
+            title="Yayın sunucusu gecikme hızını test et, yavaşsa tek tıkla hızlı sunucuya geç"
+            className="flex shrink-0 items-center gap-2 rounded-full bg-white/10 px-3.5 py-2.5 text-xs font-bold text-white hover:bg-white/20 active:scale-95 md:px-4 md:py-3 md:text-sm"
+          >
+            <Activity className="h-4 w-4 text-cyan-400" />
+            <span>⚡ Hız Testi & Tanı</span>
           </button>
 
           <button

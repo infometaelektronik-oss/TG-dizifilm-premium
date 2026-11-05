@@ -9,7 +9,9 @@ import {
   listUserStreamsPage,
   removeUserStream,
   saveUserStream,
+  rowToStream,
 } from "@/lib/streams.functions";
+import { loadStore } from "@/db/native-db";
 import { checkIsAdmin, claimFirstAdmin } from "@/lib/admin.functions";
 
 import { CardManager } from "./admin/CardManager";
@@ -327,71 +329,86 @@ export function AdminSources({ focusedKey, registerRef, onPick, streams, onChang
 /** Every active stream (Turkish first). Used by the public app. */
 export function useAllStreams() {
   const listFn = useServerFn(listUserStreams);
-  const [streams, setStreams] = useState<UserStream[]>([]);
+  const [streams, setStreams] = useState<UserStream[]>(() => {
+    try {
+      const store = loadStore();
+      const list = (store.user_streams || []).filter((s) => s.is_active !== false && !s.deleted_at);
+      return list.map(rowToStream);
+    } catch {
+      return [];
+    }
+  });
+
   const refresh = async () => {
     try {
-      setStreams(await listFn());
+      const res = await fetch("/api/db/data");
+      if (res.ok) {
+        const store = await res.json();
+        if (store?.user_streams && Array.isArray(store.user_streams) && store.user_streams.length > 0) {
+          const list = store.user_streams.filter((s: any) => s.is_active !== false && !s.deleted_at);
+          setStreams(list.map(rowToStream));
+          return;
+        }
+      }
+      const data = await listFn();
+      if (Array.isArray(data) && data.length > 0) {
+        setStreams(data);
+      }
     } catch {
-      setStreams([]);
+      // Keep existing streams on network error
     }
   };
-  useEffect(() => { refresh(); }, []);
+
+  useEffect(() => {
+    refresh();
+    const handleSync = () => refresh();
+    window.addEventListener("tg-db-synced", handleSync);
+    return () => window.removeEventListener("tg-db-synced", handleSync);
+  }, []);
+
   return { streams, refresh };
 }
 
 export function useUserStreams() {
-  const listFn = useServerFn(listUserStreamsPage);
-  const [streams, setStreams] = useState<UserStream[]>([]);
-  const [totalCount, setTotalCount] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [generalOffset, setGeneralOffset] = useState(0);
+  const [streams, setStreams] = useState<UserStream[]>(() => {
+    try {
+      const store = loadStore();
+      return (store.user_streams || []).filter((s) => !s.deleted_at).map(rowToStream);
+    } catch {
+      return [];
+    }
+  });
+  const [totalCount, setTotalCount] = useState(() => streams.length);
+
   const refresh = async () => {
     try {
-      const [page, seriesPage, moviesPage, radioPage, livePage] = await Promise.all([
-        listFn({ data: { limit: 100, offset: 0 } }),
-        listFn({ data: { limit: 100, offset: 0, category: "Series" } }),
-        listFn({ data: { limit: 100, offset: 0, category: "Movies" } }),
-        listFn({ data: { limit: 100, offset: 0, category: "Radio" } }),
-        listFn({ data: { limit: 100, offset: 0, category: "Live TV" } }),
-      ]);
-      const unique = new Map<string, UserStream>();
-      [...page.items, ...seriesPage.items, ...moviesPage.items, ...radioPage.items, ...livePage.items].forEach((stream) =>
-        unique.set(stream.id, stream),
-      );
-      setStreams(Array.from(unique.values()));
-      setGeneralOffset(page.items.length);
-      setTotalCount(page.total);
-      setHasMore(page.hasMore);
+      const res = await fetch("/api/db/data");
+      if (res.ok) {
+        const store = await res.json();
+        if (store?.user_streams && Array.isArray(store.user_streams) && store.user_streams.length > 0) {
+          const all = store.user_streams.filter((s: any) => !s.deleted_at).map(rowToStream);
+          setStreams(all);
+          setTotalCount(all.length);
+        }
+      }
     } catch {
-      setStreams([]);
-      setTotalCount(0);
-      setHasMore(false);
+      // Keep existing
     }
   };
-  useEffect(() => { refresh(); }, []);
+
+  useEffect(() => {
+    refresh();
+    const handleSync = () => refresh();
+    window.addEventListener("tg-db-synced", handleSync);
+    return () => window.removeEventListener("tg-db-synced", handleSync);
+  }, []);
+
   return {
     streams,
     refresh,
-    loadMore: async () => {
-      if (loadingMore || !hasMore) return;
-      setLoadingMore(true);
-      try {
-        const page = await listFn({ data: { limit: 100, offset: generalOffset } });
-        setStreams((current) => {
-          const unique = new Map(current.map((stream) => [stream.id, stream]));
-          page.items.forEach((stream) => unique.set(stream.id, stream));
-          return Array.from(unique.values());
-        });
-        setGeneralOffset((offset) => offset + page.items.length);
-        setTotalCount(page.total);
-        setHasMore(page.hasMore);
-      } finally {
-        setLoadingMore(false);
-      }
-    },
-    hasMore,
-    loadingMore,
+    loadMore: async () => {},
+    hasMore: false,
+    loadingMore: false,
     totalCount,
   };
 }
